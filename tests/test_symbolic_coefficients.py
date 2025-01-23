@@ -202,8 +202,8 @@ class TestSC:
 
         eq_f = Eq(f, f.dx2(weights=weights))
 
-        expected = 'Eq(f(x + h_x/2), (1.0*f(x - h_x/2) - 2.0*f(x + h_x/2)'\
-            ' + 1.0*f(x + 3*h_x/2))/h_x**2)'
+        expected = 'Eq(f(x + h_x/2), 1.0*f(x - h_x/2)/h_x**2 - 2.0*f(x + h_x/2)/h_x**2 '\
+            '+ 1.0*f(x + 3*h_x/2)/h_x**2)'
         assert(str(eq_f.evaluate) == expected)
 
     @pytest.mark.parametrize('stagger', [True, False])
@@ -344,3 +344,31 @@ class TestSC:
         df_s = f.dx(weights=coeffs1)
 
         assert sp.simplify(df_s.evaluate - df.evaluate) == 0
+
+    def test_backward_compat_mixed(self):
+
+        grid = Grid(shape=(11,))
+        x, = grid.dimensions
+
+        f = Function(name='f', grid=grid, space_order=8)
+        g = Function(name='g', grid=grid, space_order=2)
+
+        coeffs0 = np.arange(0, 9)
+
+        coeffs = Coefficient(1, f, x, coeffs0)
+
+        eq = Eq(f, f.dx * g.dxc, coefficients=Substitutions(coeffs))
+
+        derivs = retrieve_derivatives(eq.rhs)
+
+        assert len(derivs) == 2
+        df = [d for d in derivs if d.expr == f][0]
+        dg = [d for d in derivs if d.expr == g][0]
+
+        assert np.all(df.weights == coeffs0)
+        assert dg.weights is None
+
+        eqe = eq.evaluate
+        assert '7.0*f(x + 3*h_x)' in str(eqe.rhs)
+        assert '0.5*g(x + h_x)' in str(eqe.rhs)
+        assert 'g(x + 2*h_x)' not in str(eqe.rhs)

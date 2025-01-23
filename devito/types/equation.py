@@ -90,6 +90,7 @@ class Eq(sympy.Eq, Evaluable, Pickable):
         for coeff in coefficients.coefficients:
             derivs = [d for d in retrieve_derivatives(expr)
                       if coeff.dimension in d.dims and
+                      coeff.function in d.expr._functions and
                       coeff.deriv_order == d.deriv_order.get(coeff.dimension, None)]
             if not derivs:
                 continue
@@ -97,7 +98,7 @@ class Eq(sympy.Eq, Evaluable, Pickable):
         if not mapper:
             return expr
 
-        return expr.xreplace(mapper)
+        return expr.subs(mapper)
 
     def _evaluate(self, **kwargs):
         """

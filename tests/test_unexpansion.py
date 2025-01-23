@@ -3,7 +3,7 @@ import pytest
 
 from conftest import assert_structure, get_params, get_arrays, check_array
 from devito import (Buffer, Eq, Function, TimeFunction, Grid, Operator,
-                    cos, sin)
+                    Coefficient, Substitutions, cos, sin)
 from devito.finite_differences import Weights
 from devito.arch.compiler import OneapiCompiler
 from devito.ir import Expression, FindNodes, FindSymbols
@@ -51,7 +51,7 @@ class TestSymbolicCoeffs:
         Operator(Eq(u, (v*u.dx).dy(weights=w)), opt=opt).cfunction
 
     @pytest.mark.parametrize('coeffs,expected', [
-        ((7, 7, 7), 1),  # We've had a bug triggered by identical coeffs
+        ((7, 7, 7), 3),  # We've had a bug triggered by identical coeffs
         ((5, 7, 9), 3),
     ])
     def test_multiple_cross_derivs(self, coeffs, expected):
@@ -75,6 +75,59 @@ class TestSymbolicCoeffs:
         functions = FindSymbols().visit(op)
         weights = {f for f in functions if isinstance(f, Weights)}
         assert len(weights) == expected
+
+    @pytest.mark.parametrize('order', [1, 2])
+    @pytest.mark.parametrize('nweight', [None, +4, -4])
+    def test_legacy_api(self, order, nweight):
+        grid = Grid(shape=(51, 51, 51))
+        x, y, z = grid.dimensions
+
+        nweight = 0 if nweight is None else nweight
+        so = 8
+
+        u = TimeFunction(name='u', grid=grid, space_order=so,
+                         coefficients='symbolic')
+
+        w0 = np.arange(so + 1 + nweight) + 1
+        s = f'({x.spacing}*{x.spacing})' if order == 2 else f'{x.spacing}'
+        wstr = f'{{{w0[0]:1.1f}F/{s},'
+        wdef = f'[{so + 1 + nweight}] __attribute__ ((aligned (64)))'
+
+        coeffs_x_p1 = Coefficient(order, u, x, w0)
+
+        coeffs = Substitutions(coeffs_x_p1)
+
+        eqn = Eq(u, u.dx.dy + u.dx2 + .37, coefficients=coeffs)
+
+        if nweight > 0:
+            with pytest.raises(ValueError):
+                op = Operator(eqn, opt=('advanced', {'expand': False}))
+        else:
+            op = Operator(eqn, opt=('advanced', {'expand': False}))
+            assert f'{wdef} = {wstr}' in str(op)
+
+    def test_legacy_api_v2(self):
+        grid = Grid(shape=(10, 10, 10))
+        x, y, z = grid.dimensions
+
+        u = TimeFunction(name='u', grid=grid, space_order=4)
+
+        cc = np.array([2, 2, 2, 2, 2])
+        coeffs = [Coefficient(1, u, d, cc) for d in grid.dimensions]
+        coeffs = Substitutions(*coeffs)
+
+        eq0 = Eq(u.forward, u.dx.dz + 1.0)
+        eq1 = Eq(u.forward, u.dx.dz + 1.0, coefficients=coeffs)
+
+        op0 = Operator(eq0, opt=('advanced', {'expand': False}))
+        op1 = Operator(eq1, opt=('advanced', {'expand': False}))
+
+        assert (op0._profiler._sections['section0'].sops ==
+                op1._profiler._sections['section0'].sops)
+        weights = [i for i in FindSymbols().visit(op1) if isinstance(i, Weights)]
+        w0, w1 = sorted(weights, key=lambda i: i.name)
+        assert all(i.args[1] == 1/x.spacing for i in w0.weights)
+        assert all(i.args[1] == 1/z.spacing for i in w1.weights)
 
 
 class Test1Pass:
